@@ -113,6 +113,18 @@ class Config:
                     sys.exit(1)
                 setattr(self, k, v in ('true', 'True', 'on', '1'))
 
+        # aiohttp hands HOST straight to getaddrinfo, which has no notion of a
+        # '*' wildcard: the lookup fails and takes the server down at startup
+        # with an opaque DNS error. '*' is nevertheless what people reach for
+        # when they want to serve both IP stacks, while the value that actually
+        # does it -- an empty string, which asyncio expands to one listening
+        # socket per address family -- is undiscoverable. Accept '*' as the
+        # spelling for "every interface, both stacks". Note that '::' on its own
+        # is IPv6-only regardless of the host's bindv6only setting, because
+        # asyncio always sets IPV6_V6ONLY on the sockets it binds.
+        if self.HOST.strip() == '*':
+            self.HOST = ''
+
         if not self.URL_PREFIX.endswith('/'):
             self.URL_PREFIX += '/'
 
@@ -1386,7 +1398,9 @@ def isAccessLogEnabled():
 
 if __name__ == '__main__':
     logging.getLogger().setLevel(parseLogLevel(config.LOGLEVEL) or logging.INFO)
-    log.info(f"Listening on {config.HOST}:{config.PORT}")
+    # An empty HOST binds every interface on both stacks; print the '*' spelling
+    # that selects it rather than a bare ':8081'.
+    log.info(f"Listening on {config.HOST or '*'}:{config.PORT}")
 
 
     # Auto-detect cookie file on startup

@@ -51,6 +51,24 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(c.PUBLIC_HOST_URL, "")
         self.assertEqual(c.PUBLIC_HOST_AUDIO_URL, "")
 
+    def test_host_wildcard_becomes_empty_for_dual_stack(self):
+        # Regression: aiohttp passes HOST to getaddrinfo, which does not resolve
+        # '*' -- the server died at startup on a DNS error. '*' now selects the
+        # empty string, the only value asyncio expands to a listening socket per
+        # address family.
+        for raw in ("*", " * "):
+            with self.subTest(raw=raw):
+                with patch.dict(os.environ, _base_env(HOST=raw), clear=False):
+                    c = Config()
+                self.assertEqual(c.HOST, "")
+
+    def test_host_literal_addresses_are_untouched(self):
+        for raw in ("0.0.0.0", "::", "127.0.0.1", ""):
+            with self.subTest(raw=raw):
+                with patch.dict(os.environ, _base_env(HOST=raw), clear=False):
+                    c = Config()
+                self.assertEqual(c.HOST, raw)
+
     def test_blank_audio_host_falls_back_to_audio_download_route(self):
         # Regression: a present-but-blank PUBLIC_HOST_AUDIO_URL must not stay empty
         # (which produced root-relative, 404ing audio links). It falls back to the
