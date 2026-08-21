@@ -732,8 +732,12 @@
                     }
                   </span>
                 } @else {
-                  <ngb-progressbar height="1.5rem" [showValue]="download.value.status !== 'preparing'" [striped]="download.value.status === 'preparing'" [animated]="download.value.status === 'preparing'" type="success"
-                  [value]="download.value.status === 'preparing' ? 100 : download.value.percent" class="download-progressbar" />
+                  <ngb-progressbar height="1.5rem" [showValue]="!isIndeterminate(download.value)" [striped]="isIndeterminate(download.value)" [animated]="isIndeterminate(download.value)" type="success"
+                  [value]="isIndeterminate(download.value) ? 100 : download.value.percent" class="download-progressbar">
+                    @if (download.value.status === 'postprocessing') {
+                      <span>Post-processing</span>
+                    }
+                  </ngb-progressbar>
                 }
               </div>
             </td>

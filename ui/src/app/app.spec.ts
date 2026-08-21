@@ -473,4 +473,50 @@ describe('App', () => {
       expect(app.buildChapterDownloadLink(audio, 'ch1.mp3')).toBe('audio_download/ch1.mp3');
     });
   });
+
+  // Issue #424: ffmpeg work after the bytes land (merge, re-encode, split) used
+  // to leave the row on a full, frozen bar with the item counted as neither
+  // active nor queued.
+  describe('post-processing is visible (#424)', () => {
+    const queueEntry = (status: string): Download => ({
+      id: 'vid1',
+      title: 'Test',
+      url: 'https://example.com/v',
+      download_type: 'video',
+      quality: 'best',
+      format: 'any',
+      folder: '',
+      custom_name_prefix: '',
+      playlist_item_limit: 0,
+      status,
+      msg: '',
+      percent: 100,
+      speed: 0,
+      eta: 0,
+      filename: '',
+      checked: false,
+    } as Download);
+
+    it('runs the bar indeterminate while preparing or post-processing', () => {
+      const app = TestBed.createComponent(App).componentInstance;
+      expect(app.isIndeterminate(queueEntry('preparing'))).toBe(true);
+      expect(app.isIndeterminate(queueEntry('postprocessing'))).toBe(true);
+      expect(app.isIndeterminate(queueEntry('downloading'))).toBe(false);
+      expect(app.isIndeterminate(queueEntry('pending'))).toBe(false);
+    });
+
+    it('labels the bar and counts the item as active', () => {
+      // The component subscribes to queueChanged on construction, so the entry
+      // has to be announced after it exists or updateMetrics never runs.
+      const fixture = TestBed.createComponent(App);
+      downloads.queue.set('https://example.com/v', queueEntry('postprocessing'));
+      downloads.queueChanged.next();
+      fixture.detectChanges();
+
+      expect((fixture.nativeElement as HTMLElement).textContent).toContain('Post-processing');
+      expect(fixture.componentInstance.activeDownloads).toBe(1);
+      expect(fixture.componentInstance.queuedDownloads).toBe(0);
+    });
+  });
+
 });

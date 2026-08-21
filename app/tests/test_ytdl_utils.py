@@ -777,6 +777,80 @@ class ProgressThrottleTests(unittest.TestCase):
         self.assertIn("error", statuses)
 
 
+class PostprocessorHookTests(unittest.TestCase):
+    """The postprocessing phase must be visible without ever displacing the
+    terminal 'finished' status that _post_download_cleanup keys off."""
+
+    def _hook(self):
+        dl = _make_test_download()
+        forwarded = []
+        dl.status_queue = types.SimpleNamespace(put=forwarded.append)
+        return dl._make_postprocessor_hook(), forwarded
+
+    def test_postprocessor_start_reports_the_phase(self):
+        hook, forwarded = self._hook()
+        hook({"postprocessor": "VideoConvertor", "status": "started", "info_dict": {}})
+        self.assertEqual(forwarded, [{"status": "postprocessing"}])
+
+    def test_postprocessor_finish_is_not_reported(self):
+        # Only 'started' moves the UI; a PP finishing says nothing about what
+        # comes next, and an extra broadcast per PP buys nothing.
+        hook, forwarded = self._hook()
+        hook({"postprocessor": "VideoConvertor", "status": "finished", "info_dict": {}})
+        self.assertEqual(forwarded, [])
+
+    def test_move_files_still_reports_finished_with_the_final_path(self):
+        hook, forwarded = self._hook()
+        hook({
+            "postprocessor": "MoveFiles",
+            "status": "finished",
+            "info_dict": {"filepath": "/tmp/video.mp4"},
+        })
+        self.assertEqual(forwarded, [{"status": "finished", "filename": "/tmp/video.mp4"}])
+
+    def test_nothing_is_reported_after_move_files_finished(self):
+        # Regression guard: _post_download_cleanup turns any final status other
+        # than 'finished' into an error, so an 'after_move' postprocessor
+        # starting up must not overwrite it and fail the download.
+        hook, forwarded = self._hook()
+        hook({
+            "postprocessor": "MoveFiles",
+            "status": "finished",
+            "info_dict": {"filepath": "/tmp/video.mp4"},
+        })
+        hook({"postprocessor": "SomeAfterMovePP", "status": "started", "info_dict": {}})
+        self.assertEqual([item["status"] for item in forwarded], ["finished"])
+
+    def test_realistic_sequence_ends_finished(self):
+        hook, forwarded = self._hook()
+        for pp in ("Merger", "VideoConvertor", "Metadata"):
+            hook({"postprocessor": pp, "status": "started", "info_dict": {}})
+            hook({"postprocessor": pp, "status": "finished", "info_dict": {}})
+        hook({"postprocessor": "MoveFiles", "status": "started", "info_dict": {}})
+        hook({
+            "postprocessor": "MoveFiles",
+            "status": "finished",
+            "info_dict": {"filepath": "/tmp/video.mp4"},
+        })
+
+        statuses = [item["status"] for item in forwarded]
+        self.assertEqual(statuses[-1], "finished")
+        self.assertEqual(statuses.count("finished"), 1)
+        self.assertTrue(all(st == "postprocessing" for st in statuses[:-1]))
+
+    def test_split_chapters_still_captures_files_without_a_status(self):
+        hook, forwarded = self._hook()
+        hook({
+            "postprocessor": "SplitChapters",
+            "status": "finished",
+            "info_dict": {"chapters": [{"filepath": "/tmp/ch1.mp4"}, {"filepath": "/tmp/ch2.mp4"}]},
+        })
+        self.assertEqual(
+            forwarded,
+            [{"chapter_file": "/tmp/ch1.mp4"}, {"chapter_file": "/tmp/ch2.mp4"}],
+        )
+
+
 class CancelProcessGroupTests(unittest.TestCase):
     # cancel() now sends SIGINT first (so yt-dlp/ffmpeg can finalize the
     # partial file) and schedules a SIGKILL escalation via the event loop
@@ -1202,7 +1276,13 @@ class UpdateStatusFileStatTests(unittest.IsolatedAsyncioTestCase):
         download.loop = asyncio.get_running_loop()
         download._executor = ThreadPoolExecutor(max_workers=1)
         notifier = MagicMock()
-        notifier.updated = AsyncMock()
+        # updated() is handed the same DownloadInfo every time, so the status has
+        # to be copied out when the call happens -- reading it off the recorded
+        # call args afterwards only ever shows the final value.
+        notifier.broadcast_statuses = []
+        notifier.updated = AsyncMock(
+            side_effect=lambda info: notifier.broadcast_statuses.append(info.status)
+        )
         download.notifier = notifier
 
         stat_calls = []
@@ -1237,3 +1317,36 @@ class UpdateStatusFileStatTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(stat_calls, ["/tmp/v.mp4"])
         self.assertIsNone(download.info.size)
+
+    async def test_repeated_postprocessing_status_is_broadcast_once(self):
+        # yt-dlp's metaclass wraps run() once per class in a postprocessor's MRO,
+        # so one whose subclass overrides run (FFmpegCopyStream, among others)
+        # reports 'started' twice. Observed live on a 13s libx264 re-encode.
+        download, _ = await self._run_update_status([
+            {"status": "downloading", "downloaded_bytes": 1},
+            {"status": "postprocessing"},
+            {"status": "postprocessing"},
+            {"status": "postprocessing"},
+            {"status": "finished", "filename": "/tmp/v.mp4"},
+        ])
+
+        self.assertEqual(
+            download.notifier.broadcast_statuses,
+            ["downloading", "postprocessing", "finished"],
+        )
+
+    async def test_postprocessing_is_announced_again_after_the_download_resumes(self):
+        # An audio download runs pre_process postprocessors before the bytes
+        # arrive, so 'postprocessing' legitimately appears on both sides of the
+        # download. Deduping against the live status keeps the second one.
+        download, _ = await self._run_update_status([
+            {"status": "postprocessing"},
+            {"status": "downloading", "downloaded_bytes": 1},
+            {"status": "postprocessing"},
+            {"status": "finished", "filename": "/tmp/v.mp4"},
+        ])
+
+        self.assertEqual(
+            download.notifier.broadcast_statuses,
+            ["postprocessing", "downloading", "postprocessing", "finished"],
+        )

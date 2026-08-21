@@ -771,6 +771,59 @@ class Download:
 
         return put_status
 
+    def _make_postprocessor_hook(self):
+        # yt-dlp reports the download 'finished' as soon as the media bytes
+        # have landed, but the ffmpeg work that follows -- merging,
+        # re-encoding, chapter splitting, sponsor removal -- routinely takes
+        # longer than the download itself and said nothing until now, leaving
+        # the row on a full, frozen progress bar for minutes. Report the phase
+        # so the UI can run its indeterminate bar instead.
+        #
+        # Latched off once MoveFiles reports finished: that branch emits the
+        # terminal 'finished', and _post_download_cleanup turns any other
+        # final status into an error, so nothing may overwrite it. yt-dlp does
+        # run an 'after_move' stage after MoveFiles, but every postprocessor
+        # MeTube configures is 'after_filter' or 'post_process', both of which
+        # precede it. Each postprocessor emits exactly one started/finished
+        # pair, so this needs no throttling.
+        postprocessing_done = False
+
+        def put_status_postprocessor(d):
+            nonlocal postprocessing_done
+            if d['postprocessor'] == 'MoveFiles' and d['status'] == 'finished':
+                postprocessing_done = True
+                filepath = d['info_dict']['filepath']
+                if '__finaldir' in d['info_dict']:
+                    finaldir = d['info_dict']['__finaldir']
+                    filename = os.path.join(finaldir, os.path.basename(filepath))
+                else:
+                    filename = filepath
+                self.status_queue.put({'status': 'finished', 'filename': filename})
+                # For captions-only downloads, yt-dlp may still report a media-like
+                # filepath in MoveFiles. Capture subtitle outputs explicitly so the
+                # UI can link to real caption files.
+                if getattr(self.info, 'download_type', '') == 'captions':
+                    requested_subtitles = d.get('info_dict', {}).get('requested_subtitles', {}) or {}
+                    for subtitle in requested_subtitles.values():
+                        if isinstance(subtitle, dict) and subtitle.get('filepath'):
+                            self.status_queue.put({'subtitle_file': subtitle['filepath']})
+
+            # Capture all chapter files when SplitChapters finishes
+            elif d.get('postprocessor') == 'SplitChapters' and d.get('status') == 'finished':
+                chapters = d.get('info_dict', {}).get('chapters', [])
+                if chapters:
+                    for chapter in chapters:
+                        if isinstance(chapter, dict) and 'filepath' in chapter:
+                            log.info(f"Captured chapter file: {chapter['filepath']}")
+                            self.status_queue.put({'chapter_file': chapter['filepath']})
+                else:
+                    log.warning("SplitChapters finished but no chapter files found in info_dict")
+
+            elif d.get('status') == 'started' and not postprocessing_done:
+                self.status_queue.put({'status': 'postprocessing'})
+
+        return put_status_postprocessor
+
     def _make_youtube_dl(self, params):
         ydl = _ConfinedYoutubeDL(
             params=params,
@@ -815,35 +868,7 @@ class Download:
         try:
             debug_logging = logging.getLogger().isEnabledFor(logging.DEBUG)
             put_status = self._make_progress_hook()
-
-            def put_status_postprocessor(d):
-                if d['postprocessor'] == 'MoveFiles' and d['status'] == 'finished':
-                    filepath = d['info_dict']['filepath']
-                    if '__finaldir' in d['info_dict']:
-                        finaldir = d['info_dict']['__finaldir']
-                        filename = os.path.join(finaldir, os.path.basename(filepath))
-                    else:
-                        filename = filepath
-                    self.status_queue.put({'status': 'finished', 'filename': filename})
-                    # For captions-only downloads, yt-dlp may still report a media-like
-                    # filepath in MoveFiles. Capture subtitle outputs explicitly so the
-                    # UI can link to real caption files.
-                    if getattr(self.info, 'download_type', '') == 'captions':
-                        requested_subtitles = d.get('info_dict', {}).get('requested_subtitles', {}) or {}
-                        for subtitle in requested_subtitles.values():
-                            if isinstance(subtitle, dict) and subtitle.get('filepath'):
-                                self.status_queue.put({'subtitle_file': subtitle['filepath']})
-
-                # Capture all chapter files when SplitChapters finishes
-                elif d.get('postprocessor') == 'SplitChapters' and d.get('status') == 'finished':
-                    chapters = d.get('info_dict', {}).get('chapters', [])
-                    if chapters:
-                        for chapter in chapters:
-                            if isinstance(chapter, dict) and 'filepath' in chapter:
-                                log.info(f"Captured chapter file: {chapter['filepath']}")
-                                self.status_queue.put({'chapter_file': chapter['filepath']})
-                    else:
-                        log.warning("SplitChapters finished but no chapter files found in info_dict")
+            put_status_postprocessor = self._make_postprocessor_hook()
 
             ytdl_params = {
                 'quiet': not debug_logging,
@@ -1088,6 +1113,17 @@ class Download:
                 ):
                     self.info.filename = rel_path
                     self.info.size = file_size
+                continue
+
+            # yt-dlp's postprocessor metaclass wraps run() once per class in the
+            # MRO, so a postprocessor whose subclass overrides run reports
+            # started twice (FFmpegCopyStream, among others). Nothing has changed
+            # between the two, so drop the repeat rather than re-encode and
+            # rebroadcast the same state to every connected client. Compared
+            # against the live status, not a flag in the hook, so the phase is
+            # still announced when a pre_process postprocessor ran before the
+            # download and 'downloading' came in between.
+            if status['status'] == 'postprocessing' and self.info.status == 'postprocessing':
                 continue
 
             self.info.status = status['status']

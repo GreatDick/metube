@@ -1184,6 +1184,14 @@ export class App implements AfterViewInit, OnInit, OnDestroy {
     this.downloads.startById([id]).subscribe((res) => this.handleActionResult(res, 'Start download failed'));
   }
 
+  // 'preparing' (yt-dlp starting up) and 'postprocessing' (ffmpeg merging,
+  // re-encoding or splitting once the bytes have landed) both have real work in
+  // flight with no percentage to report, so the bar runs animated at full width
+  // instead of showing a number that cannot move.
+  isIndeterminate(download: Download): boolean {
+    return download.status === 'preparing' || download.status === 'postprocessing';
+  }
+
   liveCountdownSeconds(download: Download): number | null {
     const ts = download.live_release_timestamp;
     if (ts == null || download.status !== 'scheduled') {
@@ -1697,7 +1705,7 @@ export class App implements AfterViewInit, OnInit, OnDestroy {
       if (download.status === 'downloading') {
         active++;
         speed += download.speed || 0;
-      } else if (download.status === 'preparing') {
+      } else if (download.status === 'preparing' || download.status === 'postprocessing') {
         active++;
       } else if (download.status === 'pending' || download.status === 'scheduled') {
         queued++;
