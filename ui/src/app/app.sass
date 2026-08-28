@@ -10,6 +10,28 @@
     padding: 0.5rem 0
     margin-top: 3.5rem
 
+.metube-section-toggle
+    // Positioned so it paints above the header's full-bleed :before overlay.
+    position: relative
+    display: flex
+    align-items: center
+    // Title left, chevron against the right edge, so all three section titles
+    // stay on the same left margin whether or not a chevron is present.
+    justify-content: space-between
+    gap: 0.75rem
+    width: 100%
+    padding: 0
+    border: 0
+    background: none
+    color: inherit
+    font: inherit
+    text-align: left
+
+.metube-section-chevron
+    font-size: 1.1rem
+    width: 1.1rem
+    color: var(--bs-secondary-color)
+
 .metube-section-header:before
     content: ""
     position: absolute

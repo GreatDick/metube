@@ -168,6 +168,31 @@ describe('App', () => {
     expect(fixture.componentInstance.folder).toBe('music');
   });
 
+  it('collapses each section independently and remembers it (#1070)', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    const cookies = TestBed.inject(CookieService);
+
+    expect(app.downloadingCollapsed).toBe(false);
+    expect(app.completedCollapsed).toBe(false);
+    expect(app.subscriptionsCollapsed).toBe(false);
+
+    app.toggleCompletedCollapsed();
+
+    expect(app.completedCollapsed).toBe(true);
+    expect(app.downloadingCollapsed).toBe(false);
+    expect(app.subscriptionsCollapsed).toBe(false);
+    expect(cookies.get('metube_completed_collapsed')).toBe('true');
+
+    // A fresh component picks the state back up from the cookie.
+    const restored = TestBed.createComponent(App);
+    restored.detectChanges();
+    expect(restored.componentInstance.completedCollapsed).toBe(true);
+    expect(restored.componentInstance.downloadingCollapsed).toBe(false);
+    expect(restored.componentInstance.subscriptionsCollapsed).toBe(false);
+  });
+
   it('asIsOrder returns a stable comparator value (insertion order preserved)', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance;

@@ -136,6 +136,9 @@ export class App implements AfterViewInit, OnInit, OnDestroy {
   metubeVersion: string | null = null;
   isAdvancedOpen = false;
   sortAscending = false;
+  downloadingCollapsed = false;
+  completedCollapsed = false;
+  subscriptionsCollapsed = false;
   expandedErrors: Set<string> = new Set<string>();
   cachedSortedDone: [string, Download][] = [];
   // The done ids in rendered order, so a shift-click range follows the sort
@@ -289,6 +292,9 @@ export class App implements AfterViewInit, OnInit, OnDestroy {
     this.previousDownloadType = this.downloadType;
     this.saveSelection(this.downloadType);
     this.sortAscending = this.cookieService.get('metube_sort_ascending') === 'true';
+    this.downloadingCollapsed = this.cookieService.get('metube_downloading_collapsed') === 'true';
+    this.completedCollapsed = this.cookieService.get('metube_completed_collapsed') === 'true';
+    this.subscriptionsCollapsed = this.cookieService.get('metube_subscriptions_collapsed') === 'true';
 
     const ci = parseInt(this.cookieService.get('metube_check_interval') || '', 10);
     if (!Number.isNaN(ci) && ci >= 1) {
@@ -1567,6 +1573,21 @@ export class App implements AfterViewInit, OnInit, OnDestroy {
     this.sortAscending = !this.sortAscending;
     this.cookieService.set('metube_sort_ascending', this.sortAscending ? 'true' : 'false', { expires: this.settingsCookieExpiryDays });
     this.rebuildSortedDone();
+  }
+
+  toggleDownloadingCollapsed() {
+    this.downloadingCollapsed = !this.downloadingCollapsed;
+    this.cookieService.set('metube_downloading_collapsed', this.downloadingCollapsed ? 'true' : 'false', { expires: this.settingsCookieExpiryDays });
+  }
+
+  toggleCompletedCollapsed() {
+    this.completedCollapsed = !this.completedCollapsed;
+    this.cookieService.set('metube_completed_collapsed', this.completedCollapsed ? 'true' : 'false', { expires: this.settingsCookieExpiryDays });
+  }
+
+  toggleSubscriptionsCollapsed() {
+    this.subscriptionsCollapsed = !this.subscriptionsCollapsed;
+    this.cookieService.set('metube_subscriptions_collapsed', this.subscriptionsCollapsed ? 'true' : 'false', { expires: this.settingsCookieExpiryDays });
   }
 
   private rebuildSortedDone() {
